@@ -78,10 +78,10 @@ pipeline {
         }
         stage('Docker Login') {
             steps {
-                        withDockerRegistry(credentialsId: 'docker') {
-                        sh 'docker info'
+                    withDockerRegistry(credentialsId: 'docker') {
+                    sh 'docker info'
                     }
-                }
+             }
         }
 
         stage('Docker Scout Scan') {
