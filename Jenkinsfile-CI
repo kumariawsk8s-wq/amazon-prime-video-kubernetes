@@ -1,14 +1,55 @@
+//sonar qube: squ_b0cf51f71179f4caf8192790425f0a4bf070faf8
 pipeline {
     agent any
+    tools {
+    jdk 'jdk'
+    nodejs 'node17'
+    }
+
+    environment {
+        SCANNER_HOME = tool 'SonarScanner'
+    }
 
     stages {
-        stage('Checkout') {
-            steps {
-                echo "Cloning Repository..."
 
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
                 git branch: 'main',
                     url: 'https://github.com/kumariawsk8s-wq/amazon-prime-video-kubernetes.git'
             }
         }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh '''
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=amazon-prime-video \
+                        -Dsonar.projectName="Amazon Prime Video" \
+                        -Dsonar.sources=.
+                    '''
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false
+                }
+            }
+        }
+        stage('Install Dependencies') {
+			steps {
+				echo 'Installing Dependencies...'
+					sh 'npm install'
+			}
+		}
     }
 }
