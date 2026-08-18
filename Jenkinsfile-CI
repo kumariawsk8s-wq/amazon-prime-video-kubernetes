@@ -1,14 +1,15 @@
-//sonar qube: squ_b0cf51f71179f4caf8192790425f0a4bf070faf8
-//
 pipeline {
     agent any
+
     tools {
-    jdk 'jdk'
-    nodejs 'node17'
+        jdk 'jdk'
+        nodejs 'node17'
     }
 
     environment {
         SCANNER_HOME = tool 'SonarScanner'
+        IMAGE_NAME = "newton9/amazon-prime:latest"
+        CONTAINER_NAME = "amazon-prime-video"
     }
 
     stages {
@@ -22,19 +23,19 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/kumariawsk8s-wq/amazon-prime-video-kubernetes.git'
+                url: 'https://github.com/kumariawsk8s-wq/amazon-prime-video-kubernetes.git'
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonar') {
-                    sh '''
-                        ${SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=amazon-prime-video \
-                        -Dsonar.projectName="Amazon Prime Video" \
-                        -Dsonar.sources=.
-                    '''
+                    sh """
+                    ${SCANNER_HOME}/bin/sonar-scanner \
+                    -Dsonar.projectKey=amazon-prime-video \
+                    -Dsonar.projectName=Amazon-Prime-Video \
+                    -Dsonar.sources=.
+                    """
                 }
             }
         }
@@ -46,11 +47,212 @@ pipeline {
                 }
             }
         }
+
         stage('Install Dependencies') {
-			steps {
-				echo 'Installing Dependencies...'
-					sh 'npm install'
-			}
-		}
+            steps {
+                sh 'npm install'
+            }
+        }
+
+        stage('Trivy File System Scan') {
+            steps {
+                sh 'trivy fs . > trivyfs.txt'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    echo "Building Docker Image..."
+                    withDockerRegistry(credentialsId: 'docker') {
+                        sh 'docker build -t ${IMAGE_NAME} .'
+                    }
+                }
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                sh 'trivy image ${IMAGE_NAME} > trivyimage.txt'
+            }
+        }
+
+        stage('Docker Scout Scan') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker') {
+
+                        sh 'docker scout quickview ${IMAGE_NAME} > docker-scout-quickview.txt'
+
+                        sh 'docker scout cves ${IMAGE_NAME} > docker-scout-cves.txt'
+
+                        sh 'docker scout recommendations ${IMAGE_NAME} > docker-scout-recommendations.txt'
+                    }
+                }
+            }
+        }
+
+
+        stage('Push Docker Image') {
+            steps {
+                echo "Pushing Docker Image to Docker Hub..."
+
+                withDockerRegistry(
+                    credentialsId: 'docker',
+                    url: 'https://index.docker.io/v1/'
+                ) {
+                    sh 'docker push ${IMAGE_NAME}'
+                }
+            }
+        }
+
+        stage('Deploy Docker Container') {
+            steps {
+                script {
+
+                    sh '''
+                    docker rm -f ${CONTAINER_NAME} || true
+                    docker run -d \
+                    --name ${CONTAINER_NAME} \
+                    -p 3000:3000 \
+                    ${IMAGE_NAME}
+                    '''
+
+                }
+            }
+        }
     }
+
+    post {
+
+        always {
+
+            script {
+
+                def buildStatus = currentBuild.currentResult
+
+                def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: "GitHub User"
+
+                emailext(
+
+                    subject: "[${buildStatus}] Amazon Prime Video CI/CD Pipeline - Build #${env.BUILD_NUMBER}",
+
+                    mimeType: 'text/html',
+
+                    to: 'kandlaguntaniranjanreddy1231@gmail.com',
+
+                    body: """
+
+                    <html>
+
+                    <body>
+
+                    <h2>Amazon Prime Video CI/CD Pipeline Report</h2>
+
+                    <table border="1" cellpadding="8" cellspacing="0">
+
+                    <tr>
+                        <th align="left">Project</th>
+                        <td>${env.JOB_NAME}</td>
+                    </tr>
+
+                    <tr>
+                        <th align="left">Build Number</th>
+                        <td>#${env.BUILD_NUMBER}</td>
+                    </tr>
+
+                    <tr>
+                        <th align="left">Build Status</th>
+                        <td><b>${buildStatus}</b></td>
+                    </tr>
+
+                    <tr>
+                        <th align="left">Started By</th>
+                        <td>${buildUser}</td>
+                    </tr>
+
+                    <tr>
+                        <th align="left">Build URL</th>
+                        <td>
+                        <a href="${env.BUILD_URL}">
+                        ${env.BUILD_URL}
+                        </a>
+                        </td>
+                    </tr>
+
+                    </table>
+
+                    <br>
+
+                    <h3>Security Scan Reports</h3>
+
+                    <ul>
+
+                    <li>Trivy File System Scan</li>
+
+                    <li>Trivy Docker Image Scan</li>
+
+                    <li>Docker Scout QuickView Report</li>
+
+                    <li>Docker Scout CVE Report</li>
+
+                    <li>Docker Scout Recommendations Report</li>
+
+                    </ul>
+
+                    <br>
+
+                    <h3>Build Status Meaning</h3>
+
+                    <table border="1" cellpadding="6">
+
+                    <tr>
+                        <th>Status</th>
+                        <th>Description</th>
+                    </tr>
+
+                    <tr>
+                        <td>SUCCESS</td>
+                        <td>Pipeline executed successfully.</td>
+                    </tr>
+
+                    <tr>
+                        <td>FAILURE</td>
+                        <td>Pipeline failed due to an error.</td>
+                    </tr>
+
+                    <tr>
+                        <td>ABORTED</td>
+                        <td>Pipeline was stopped manually.</td>
+                    </tr>
+
+                    <tr>
+                        <td>UNSTABLE</td>
+                        <td>Pipeline completed with warnings.</td>
+                    </tr>
+
+                    </table>
+
+                    <br>
+
+                    Regards,<br>
+
+                    <b>Jenkins CI/CD Pipeline</b>
+
+                    </body>
+
+                    </html>
+
+                    """,
+
+                    attachmentsPattern: 'trivyfs.txt,trivyimage.txt,docker-scout-quickview.txt,docker-scout-cves.txt,docker-scout-recommendations.txt'
+
+                )
+
+            }
+
+        }
+
+    }
+
 }
