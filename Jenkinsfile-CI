@@ -139,7 +139,7 @@ pipeline {
 
                     mimeType: 'text/html',
 
-                    to: 'kandlaguntaniranjanreddy1231@gmail.com',
+                    to: 'newtonnandru@gmail.com',
 
                     body: """
 
