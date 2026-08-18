@@ -8,8 +8,8 @@ pipeline {
 
     environment {
         SCANNER_HOME = tool 'SonarScanner'
-        IMAGE_NAME = "newton9/amazon-prime:latest"
-        CONTAINER_NAME = "amazon-prime-video"
+        IMAGE_NAME = 'newton9/amazon-prime:latest'
+        CONTAINER_NAME = 'amazon-prime-video'
     }
 
     stages {
@@ -22,20 +22,22 @@ pipeline {
 
         stage('Checkout Code') {
             steps {
-                git branch: 'main',
-                url: 'https://github.com/kumariawsk8s-wq/amazon-prime-video-kubernetes.git'
+                git(
+                    branch: 'main',
+                    url: 'https://github.com/kumariawsk8s-wq/amazon-prime-video-kubernetes.git'
+                )
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonar') {
-                    sh """
-                    ${SCANNER_HOME}/bin/sonar-scanner \
-                    -Dsonar.projectKey=amazon-prime-video \
-                    -Dsonar.projectName=Amazon-Prime-Video \
-                    -Dsonar.sources=.
-                    """
+                    sh '''
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=amazon-prime-video \
+                        -Dsonar.projectName=Amazon-Prime-Video \
+                        -Dsonar.sources=.
+                    '''
                 }
             }
         }
@@ -50,48 +52,125 @@ pipeline {
 
         stage('Install Dependencies') {
             steps {
-                sh 'npm install'
+                sh '''
+                    npm install
+                '''
             }
         }
 
         stage('Trivy File System Scan') {
             steps {
-                sh 'trivy fs . > trivyfs.txt'
+                sh '''
+                    echo "Running Trivy filesystem scan..."
+
+                    trivy fs . \
+                    --format table \
+                    -o trivyfs.txt
+
+                    echo "Trivy filesystem scan completed."
+                '''
+            }
+        }
+
+        stage('Docker Login') {
+            steps {
+                echo "Logging in to Docker Hub..."
+
+                withDockerRegistry(
+                    credentialsId: 'docker',
+                    url: 'https://index.docker.io/v1/'
+                ) {
+                    sh '''
+                        echo "Docker login successful."
+                        docker info
+                    '''
+                }
+            }
+        }
+
+        stage('Docker Scout Check') {
+            steps {
+                sh '''
+                    echo "=============================="
+                    echo "Docker Version"
+                    echo "=============================="
+
+                    docker --version
+
+                    echo "=============================="
+                    echo "Docker Scout Version"
+                    echo "=============================="
+
+                    docker scout version
+
+                    echo "Docker Scout is available."
+                '''
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                script {
-                    echo "Building Docker Image..."
-                    withDockerRegistry(credentialsId: 'docker') {
-                        sh 'docker build -t ${IMAGE_NAME} .'
-                    }
-                }
+                echo "Building Docker Image..."
+
+                sh '''
+                    docker build \
+                    -t ${IMAGE_NAME} \
+                    .
+
+                    echo "Docker image created:"
+                    docker images ${IMAGE_NAME}
+                '''
             }
         }
 
         stage('Trivy Image Scan') {
             steps {
-                sh 'trivy image ${IMAGE_NAME} > trivyimage.txt'
+                echo "Running Trivy Docker image scan..."
+
+                sh '''
+                    trivy image \
+                    --format table \
+                    -o trivyimage.txt \
+                    ${IMAGE_NAME}
+
+                    echo "Trivy image scan completed."
+                '''
             }
         }
-       
+
         stage('Docker Scout Scan') {
             steps {
-                script {
-                    withDockerRegistry(credentialsId: 'docker') {
+                echo "Running Docker Scout security scans..."
 
-                        sh 'docker scout quickview ${IMAGE_NAME} > docker-scout-quickview.txt'
+                sh '''
+                    echo "=============================="
+                    echo "Docker Scout QuickView"
+                    echo "=============================="
 
-                        sh 'docker scout cves ${IMAGE_NAME} > docker-scout-cves.txt'
+                    docker scout quickview \
+                    ${IMAGE_NAME} \
+                    > docker-scout-quickview.txt
 
-                        sh 'docker scout recommendations ${IMAGE_NAME} > docker-scout-recommendations.txt'
-                    }
-                }
+                    echo "=============================="
+                    echo "Docker Scout CVE Scan"
+                    echo "=============================="
+
+                    docker scout cves \
+                    ${IMAGE_NAME} \
+                    > docker-scout-cves.txt
+
+                    echo "=============================="
+                    echo "Docker Scout Recommendations"
+                    echo "=============================="
+
+                    docker scout recommendations \
+                    ${IMAGE_NAME} \
+                    > docker-scout-recommendations.txt
+
+                    echo "Docker Scout scans completed."
+                '''
             }
         }
-
 
         stage('Push Docker Image') {
             steps {
@@ -101,24 +180,59 @@ pipeline {
                     credentialsId: 'docker',
                     url: 'https://index.docker.io/v1/'
                 ) {
-                    sh 'docker push ${IMAGE_NAME}'
+                    sh '''
+                        docker push ${IMAGE_NAME}
+                    '''
                 }
             }
         }
 
         stage('Deploy Docker Container') {
             steps {
-                script {
+                echo "Deploying Docker Container..."
 
-                    sh '''
+                sh '''
                     docker rm -f ${CONTAINER_NAME} || true
+
                     docker run -d \
                     --name ${CONTAINER_NAME} \
                     -p 3000:3000 \
                     ${IMAGE_NAME}
-                    '''
+                '''
+            }
+        }
 
-                }
+        stage('Verify Deployment') {
+            steps {
+                echo "Verifying application deployment..."
+
+                sh '''
+                    echo "Running container:"
+                    docker ps \
+                    --filter "name=${CONTAINER_NAME}"
+
+                    echo "Waiting for application..."
+                    sleep 10
+
+                    echo "Testing application..."
+
+                    curl -I \
+                    http://localhost:3000 || true
+                '''
+            }
+        }
+
+        stage('Docker Container Logs') {
+            steps {
+                sh '''
+                    echo "=============================="
+                    echo "Container Logs"
+                    echo "=============================="
+
+                    docker logs \
+                    --tail 50 \
+                    ${CONTAINER_NAME} || true
+                '''
             }
         }
     }
@@ -131,54 +245,78 @@ pipeline {
 
                 def buildStatus = currentBuild.currentResult
 
-                def buildUser = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')[0]?.userId ?: "GitHub User"
+                def causes = currentBuild.getBuildCauses(
+                    'hudson.model.Cause$UserIdCause'
+                )
+
+                def buildUser = causes ?
+                    causes[0].userId :
+                    'GitHub User'
 
                 emailext(
 
-                    subject: "[${buildStatus}] Amazon Prime Video CI/CD Pipeline - Build #${env.BUILD_NUMBER}",
+                    subject:
+                        "[${buildStatus}] Amazon Prime Video CI/CD Pipeline - Build #${env.BUILD_NUMBER}",
 
                     mimeType: 'text/html',
 
                     to: 'newtonnandru@gmail.com',
 
                     body: """
-
                     <html>
 
                     <body>
 
-                    <h2>Amazon Prime Video CI/CD Pipeline Report</h2>
+                    <h2>
+                        Amazon Prime Video CI/CD Pipeline Report
+                    </h2>
 
-                    <table border="1" cellpadding="8" cellspacing="0">
+                    <table
+                        border="1"
+                        cellpadding="8"
+                        cellspacing="0"
+                    >
 
-                    <tr>
-                        <th align="left">Project</th>
-                        <td>${env.JOB_NAME}</td>
-                    </tr>
+                        <tr>
+                            <th align="left">Project</th>
+                            <td>${env.JOB_NAME}</td>
+                        </tr>
 
-                    <tr>
-                        <th align="left">Build Number</th>
-                        <td>#${env.BUILD_NUMBER}</td>
-                    </tr>
+                        <tr>
+                            <th align="left">Build Number</th>
+                            <td>#${env.BUILD_NUMBER}</td>
+                        </tr>
 
-                    <tr>
-                        <th align="left">Build Status</th>
-                        <td><b>${buildStatus}</b></td>
-                    </tr>
+                        <tr>
+                            <th align="left">Build Status</th>
+                            <td>
+                                <b>${buildStatus}</b>
+                            </td>
+                        </tr>
 
-                    <tr>
-                        <th align="left">Started By</th>
-                        <td>${buildUser}</td>
-                    </tr>
+                        <tr>
+                            <th align="left">Started By</th>
+                            <td>${buildUser}</td>
+                        </tr>
 
-                    <tr>
-                        <th align="left">Build URL</th>
-                        <td>
-                        <a href="${env.BUILD_URL}">
-                        ${env.BUILD_URL}
-                        </a>
-                        </td>
-                    </tr>
+                        <tr>
+                            <th align="left">Docker Image</th>
+                            <td>${IMAGE_NAME}</td>
+                        </tr>
+
+                        <tr>
+                            <th align="left">Container</th>
+                            <td>${CONTAINER_NAME}</td>
+                        </tr>
+
+                        <tr>
+                            <th align="left">Build URL</th>
+                            <td>
+                                <a href="${env.BUILD_URL}">
+                                    ${env.BUILD_URL}
+                                </a>
+                            </td>
+                        </tr>
 
                     </table>
 
@@ -187,49 +325,76 @@ pipeline {
                     <h3>Security Scan Reports</h3>
 
                     <ul>
-
-                    <li>Trivy File System Scan</li>
-
-                    <li>Trivy Docker Image Scan</li>
-
-                    <li>Docker Scout QuickView Report</li>
-
-                    <li>Docker Scout CVE Report</li>
-
-                    <li>Docker Scout Recommendations Report</li>
-
+                        <li>Trivy File System Scan</li>
+                        <li>Trivy Docker Image Scan</li>
+                        <li>Docker Scout QuickView</li>
+                        <li>Docker Scout CVE Report</li>
+                        <li>Docker Scout Recommendations</li>
                     </ul>
+
+                    <br>
+
+                    <h3>Pipeline Stages</h3>
+
+                    <ol>
+                        <li>Clean Workspace</li>
+                        <li>Checkout Code</li>
+                        <li>SonarQube Analysis</li>
+                        <li>Quality Gate</li>
+                        <li>Install Dependencies</li>
+                        <li>Trivy File System Scan</li>
+                        <li>Docker Login</li>
+                        <li>Docker Scout Check</li>
+                        <li>Build Docker Image</li>
+                        <li>Trivy Image Scan</li>
+                        <li>Docker Scout Scan</li>
+                        <li>Push Docker Image</li>
+                        <li>Deploy Docker Container</li>
+                        <li>Verify Deployment</li>
+                        <li>Docker Container Logs</li>
+                    </ol>
 
                     <br>
 
                     <h3>Build Status Meaning</h3>
 
-                    <table border="1" cellpadding="6">
+                    <table
+                        border="1"
+                        cellpadding="6"
+                    >
 
-                    <tr>
-                        <th>Status</th>
-                        <th>Description</th>
-                    </tr>
+                        <tr>
+                            <th>Status</th>
+                            <th>Description</th>
+                        </tr>
 
-                    <tr>
-                        <td>SUCCESS</td>
-                        <td>Pipeline executed successfully.</td>
-                    </tr>
+                        <tr>
+                            <td>SUCCESS</td>
+                            <td>
+                                Pipeline executed successfully.
+                            </td>
+                        </tr>
 
-                    <tr>
-                        <td>FAILURE</td>
-                        <td>Pipeline failed due to an error.</td>
-                    </tr>
+                        <tr>
+                            <td>FAILURE</td>
+                            <td>
+                                Pipeline failed due to an error.
+                            </td>
+                        </tr>
 
-                    <tr>
-                        <td>ABORTED</td>
-                        <td>Pipeline was stopped manually.</td>
-                    </tr>
+                        <tr>
+                            <td>ABORTED</td>
+                            <td>
+                                Pipeline was stopped manually.
+                            </td>
+                        </tr>
 
-                    <tr>
-                        <td>UNSTABLE</td>
-                        <td>Pipeline completed with warnings.</td>
-                    </tr>
+                        <tr>
+                            <td>UNSTABLE</td>
+                            <td>
+                                Pipeline completed with warnings.
+                            </td>
+                        </tr>
 
                     </table>
 
@@ -242,17 +407,22 @@ pipeline {
                     </body>
 
                     </html>
-
                     """,
 
-                    attachmentsPattern: 'trivyfs.txt,trivyimage.txt,docker-scout-quickview.txt,docker-scout-cves.txt,docker-scout-recommendations.txt'
-
+                    attachmentsPattern:
+                        'trivyfs.txt,' +
+                        'trivyimage.txt,' +
+                        'docker-scout-quickview.txt,' +
+                        'docker-scout-cves.txt,' +
+                        'docker-scout-recommendations.txt'
                 )
 
+                archiveArtifacts(
+                    artifacts: '*.txt',
+                    allowEmptyArchive: true,
+                    fingerprint: true
+                )
             }
-
         }
-
     }
-
 }
