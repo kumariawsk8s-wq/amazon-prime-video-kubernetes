@@ -76,6 +76,13 @@ pipeline {
                 sh 'trivy image ${IMAGE_NAME} > trivyimage.txt'
             }
         }
+        stage('Docker Login') {
+            steps {
+                        withDockerRegistry(credentialsId: 'docker') {
+                        sh 'docker info'
+                    }
+                }
+        }
 
         stage('Docker Scout Scan') {
             steps {
